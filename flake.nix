@@ -1,12 +1,12 @@
 {
-  description = "Wayland split on-screen keyboard development shell";
+  description = "Wayland split on-screen keyboard";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { self, nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -15,35 +15,40 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          waylandkb = pkgs.callPackage ./nix/package.nix { };
+        in
+        {
+          inherit waylandkb;
+          default = waylandkb;
+        }
+      );
+
+      apps = forAllSystems (system: {
+        default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/waylandkb";
+          meta.description = self.packages.${system}.default.meta.description;
+        };
+      });
+
+      # Installing the package alone must not grant virtual-input permissions.
+      nixosModules.uinput = import ./config/uinput.nix;
+
+      checks = forAllSystems (system: {
+        package = self.packages.${system}.default;
+      });
+
       devShells = forAllSystems (
         system:
         let
           pkgs = import nixpkgs { inherit system; };
         in
         {
-          default = pkgs.mkShell {
-            packages = with pkgs; [
-              cargo
-              clippy
-              rustc
-              rustfmt
-              netcat-openbsd
-            ];
-
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-            ];
-
-            buildInputs = with pkgs; [
-              cairo
-              gdk-pixbuf
-              glib
-              graphene
-              gtk4
-              gtk4-layer-shell
-              pango
-            ];
-          };
+          default = import ./shell.nix { inherit pkgs; };
         }
       );
     };

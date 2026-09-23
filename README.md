@@ -32,30 +32,110 @@ screen edges, with the centre left free for the application.
   `zwp_virtual_keyboard_v1` support
 - Write access to `/dev/uinput` for system shortcuts (see below)
 
-Clone the project with:
+## Quick start — NixOS
 
-```sh
-git clone https://github.com/acup1/waylandkb.git
-cd waylandkb
+Install the package declaratively in your NixOS configuration. Nix builds the
+keyboard and supplies its Rust/GTK dependencies; no `cargo install` or
+development shell is required.
+
+### With flakes
+
+Add the `waylandkb` input to your **system's** `flake.nix` and its package to
+`environment.systemPackages`. Merge the following into your existing flake;
+keep your host's current modules and replace `my-host`/`x86_64-linux` as needed:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    waylandkb.url = "github:acup1/waylandkb";
+  };
+
+  outputs = { nixpkgs, waylandkb, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux"; # or "aarch64-linux"
+      modules = [
+        ./configuration.nix
+        # Optional: /dev/uinput access for system shortcuts such as Super+Space.
+        waylandkb.nixosModules.uinput
+        ({ pkgs, ... }: {
+          environment.systemPackages = [
+            waylandkb.packages.${pkgs.stdenv.hostPlatform.system}.default
+          ];
+        })
+      ];
+    };
+  };
+}
 ```
 
-On NixOS, enter the development shell first:
+Rebuild from the directory containing your system flake:
 
 ```sh
-nix develop
+sudo nixos-rebuild switch --flake .#my-host
+waylandkb --always-visible
 ```
 
-If flakes are disabled, use:
+Your system's lock file pins the keyboard input. The keyboard uses its own
+pinned nixpkgs for a compatible Rust/GTK stack, so you do not need to change
+your system's existing nixpkgs input. Update it later with
+`nix flake update waylandkb`, then rebuild.
+
+### Without flakes
+
+Add the source and package to your `configuration.nix` (merge these attributes
+into the existing module):
+
+```nix
+{ pkgs, ... }:
+let
+  waylandkbSrc = builtins.fetchTarball {
+    url = "https://github.com/acup1/waylandkb/archive/refs/heads/main.tar.gz";
+  };
+in
+{
+  # Optional: /dev/uinput access for system shortcuts such as Super+Space.
+  imports = [ (waylandkbSrc + "/config/uinput.nix") ];
+
+  environment.systemPackages = [
+    (import waylandkbSrc { system = pkgs.stdenv.hostPlatform.system; })
+  ];
+}
+```
+
+Then rebuild as usual:
 
 ```sh
-nix-shell
+sudo nixos-rebuild switch
+waylandkb --always-visible
 ```
+
+`default.nix` uses the same pinned nixpkgs as the flake by reading `flake.lock`
+as JSON; this does **not** enable flakes or require experimental Nix features.
+For reproducible deployments, replace the moving `main` tarball URL with
+`https://github.com/acup1/waylandkb/archive/<commit>.tar.gz` and add its
+`sha256` to `fetchTarball`. Obtain the hash with
+`nix-prefetch-url --unpack <tarball-url>`.
+
+Both methods install `waylandkb` into the system profile and add an application
+menu entry. Omit `--always-visible` to start hidden with automatic input
+detection and the tray icon. This does not enable autostart.
+
+The optional uinput module grants the active local session access to virtual
+input devices. Enable it only for trusted local sessions; see
+[System shortcuts](#system-shortcuts). Reboot after first enabling it if the
+device permissions have not taken effect.
 
 ## Run
 
 ```sh
-cargo run -- --always-visible
+waylandkb --always-visible
 ```
+
+To try a checkout without installing it into NixOS, use `nix run . --
+--always-visible`, or `nix-build` followed by
+`./result/bin/waylandkb --always-visible`. For development, enter `nix develop`
+or `nix-shell` and run `cargo run -- --always-visible`.
 
 The labels follow the active system layout automatically. The runtime selects
 the matching source from the session environment: driftwm state, Niri,

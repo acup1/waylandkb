@@ -18,6 +18,7 @@ This repository is a Rust Wayland on-screen keyboard prototype. Keep code organi
 - `config/` stores compositor snippets, the virtual keyboard XKB map, and an optional NixOS uinput module.
 - `assets/` contains the editable tray SVG and its generated PNG, embedded in the binary; regeneration is documented in `README.md`.
 - `docs/images/` stores README screenshots of real keyboard panels over a generated background, without user desktop content.
+- `nix/package.nix` is the shared Nix package; `flake.nix` exports packages/apps and the optional uinput module, while `default.nix` provides non-flake installation using the locked nixpkgs revision.
 - Module-level tests cover key mapping and interaction state; `src/live_tests.rs` contains opt-in desktop integration tests.
 
 Keep `.agents/` and `.codex/` intact. Do not place application code inside those directories.
@@ -34,6 +35,8 @@ Use Cargo for local development:
 - `printf show | nc -U /tmp/waylandkb.sock`: show a running hidden keyboard.
 
 On NixOS, run these commands inside `nix develop` or `nix-shell`. GTK4, layer-shell development libraries, and `pkg-config` must be available on the host.
+
+Nix packaging: use `nix build` (flakes) or `nix-build` (without flakes). Both build the same package, run non-interactive tests, install icons/a desktop entry, and wrap GTK runtime dependencies. `nix flake check --no-build` validates the outputs; `nix run . -- --always-visible` runs the packaged app. README installation examples must use `environment.systemPackages`, not `cargo install`. Do not run `nixos-rebuild switch` on the user's system to test packaging.
 
 ## Coding Style & Naming Conventions
 
