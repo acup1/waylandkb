@@ -386,7 +386,8 @@ fn build_ui(app: &Application, args: &Args) -> KeyboardUi {
     };
 
     ui.render();
-    attach_tray(app, &ui);
+    let auto_visibility = Rc::new(RefCell::new(visibility::AutoVisibility::default()));
+    attach_tray(app, &ui, auto_visibility.clone());
     for window in [&ui.left_window, &ui.right_window] {
         let ui = ui.downgrade();
         window.connect_close_request(move |_| {
@@ -397,33 +398,51 @@ fn build_ui(app: &Application, args: &Args) -> KeyboardUi {
         });
     }
     attach_control_socket(&ui, &args.control_socket);
-    attach_input_method_monitor(&ui, args.debug_visibility);
+    attach_input_method_monitor(&ui, auto_visibility, args.debug_visibility);
     attach_layout_monitor(&ui, initial_language);
     ui.set_visible(args.always_visible);
     ui
 }
 
-fn attach_tray(app: &Application, ui: &KeyboardUi) {
+fn attach_tray(
+    app: &Application,
+    ui: &KeyboardUi,
+    auto_visibility: Rc<RefCell<visibility::AutoVisibility>>,
+) {
     let Some(connection) = app.dbus_connection() else {
         eprintln!("tray: session bus unavailable; auto-show and control socket remain available");
         return;
     };
     let ui = ui.downgrade();
     let weak_app = app.downgrade();
-    let tray = match tray::Tray::new(&connection, move |action| {
-        if let Some(ui) = ui.upgrade() {
-            match action {
-                tray::TrayAction::Toggle => ui.set_visible(!ui.is_visible()),
-                tray::TrayAction::Show => ui.set_visible(true),
-                tray::TrayAction::Hide | tray::TrayAction::Quit => ui.set_visible(false),
+    let menu_visibility = auto_visibility.clone();
+    let tray = match tray::Tray::new(
+        &connection,
+        move || menu_visibility.borrow().is_enabled(),
+        move |action| {
+            if let Some(ui) = ui.upgrade() {
+                match action {
+                    tray::TrayAction::Toggle => ui.set_visible(!ui.is_visible()),
+                    tray::TrayAction::Show => ui.set_visible(true),
+                    tray::TrayAction::Hide | tray::TrayAction::Quit => ui.set_visible(false),
+                    tray::TrayAction::ToggleAutoShow => {
+                        let mut visibility = auto_visibility.borrow_mut();
+                        let enabled = !visibility.is_enabled();
+                        visibility.set_enabled(enabled);
+                        eprintln!(
+                            "automatic visibility: {}",
+                            if enabled { "enabled" } else { "disabled" }
+                        );
+                    }
+                }
             }
-        }
-        if action == tray::TrayAction::Quit
-            && let Some(app) = weak_app.upgrade()
-        {
-            app.quit();
-        }
-    }) {
+            if action == tray::TrayAction::Quit
+                && let Some(app) = weak_app.upgrade()
+            {
+                app.quit();
+            }
+        },
+    ) {
         Ok(tray) => tray,
         Err(error) => {
             eprintln!("tray: {error:#}");
@@ -512,15 +531,19 @@ fn attach_layout_monitor(ui: &KeyboardUi, initial: Language) {
     });
 }
 
-fn attach_input_method_monitor(ui: &KeyboardUi, debug: bool) {
+fn attach_input_method_monitor(
+    ui: &KeyboardUi,
+    visibility: Rc<RefCell<visibility::AutoVisibility>>,
+    debug: bool,
+) {
     let receivers = [
         input_method::start_monitor(),
         accessibility::start_monitor(),
     ];
-    let mut visibility = visibility::AutoVisibility::default();
     let ui = ui.clone();
     timeout_add_local(Duration::from_millis(60), move || {
         let now = Instant::now();
+        let mut visibility = visibility.borrow_mut();
         for (source, receiver) in receivers.iter().enumerate() {
             while let Ok(event) = receiver.try_recv() {
                 if debug {
@@ -529,7 +552,9 @@ fn attach_input_method_monitor(ui: &KeyboardUi, debug: bool) {
                 visibility.update(source, event, now);
             }
         }
-        if let Some(visible) = visibility.poll(now) {
+        let visible = visibility.poll(now);
+        drop(visibility);
+        if let Some(visible) = visible {
             if debug {
                 eprintln!("automatic visibility: {visible}");
             }

@@ -17,6 +17,8 @@ const WATCHER: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
 const ITEM_XML: &str = include_str!("tray_item.xml");
 const MENU_XML: &str = include_str!("tray_menu.xml");
+const AUTO_SHOW_ID: i32 = 5;
+const MENU_ITEMS: [i32; 5] = [1, 2, AUTO_SHOW_ID, 3, 4];
 
 type Properties = HashMap<String, Variant>;
 type MenuLayout = (i32, Properties, Vec<Variant>);
@@ -29,6 +31,7 @@ pub enum TrayAction {
     Show,
     Hide,
     Quit,
+    ToggleAutoShow,
 }
 
 pub struct Tray {
@@ -40,6 +43,7 @@ pub struct Tray {
 impl Tray {
     pub fn new(
         connection: &gio::DBusConnection,
+        auto_show_enabled: impl Fn() -> bool + 'static,
         action: impl Fn(TrayAction) + 'static,
     ) -> Result<Self> {
         let icons = keyboard_icons().context("could not load the built-in tray icon")?;
@@ -76,12 +80,25 @@ impl Tray {
             connection
                 .register_object(MENU_PATH, &menu_info)
                 .property(|_, _, _, _, name| menu_property(name).expect("declared menu property"))
-                .method_call(move |_, _, _, _, method, parameters, invocation| {
-                    match menu_request(method, &parameters) {
+                .method_call(move |connection, _, _, _, method, parameters, invocation| {
+                    match menu_request(method, &parameters, auto_show_enabled()) {
                         Ok((reply, actions)) => {
                             invocation.return_value(Some(&reply));
                             for event in actions {
                                 action(event);
+                                if event == TrayAction::ToggleAutoShow
+                                    && let Err(error) = connection.emit_signal(
+                                        None,
+                                        MENU_PATH,
+                                        MENU_INTERFACE,
+                                        "ItemsPropertiesUpdated",
+                                        Some(&auto_show_update(auto_show_enabled())),
+                                    )
+                                {
+                                    eprintln!(
+                                        "tray: could not update auto-show checkmark: {error}"
+                                    );
+                                }
                             }
                         }
                         Err(message) => invocation
@@ -211,21 +228,26 @@ fn menu_property(name: &str) -> Option<Variant> {
     })
 }
 
-fn menu_properties(id: i32, names: &[String]) -> Option<Properties> {
+fn menu_properties(id: i32, names: &[String], auto_show: bool) -> Option<Properties> {
     let mut props = Properties::new();
     match id {
         0 => {
             props.insert("children-display".into(), "submenu".to_variant());
         }
-        1 | 2 | 4 => {
+        1 | 2 | 4 | AUTO_SHOW_ID => {
             let label = match id {
                 1 => "Показать клавиатуру",
                 2 => "Скрыть клавиатуру",
+                AUTO_SHOW_ID => "Автоматически показывать клавиатуру",
                 _ => "Выход",
             };
             props.insert("label".into(), label.to_variant());
             props.insert("enabled".into(), true.to_variant());
             props.insert("visible".into(), true.to_variant());
+            if id == AUTO_SHOW_ID {
+                props.insert("toggle-type".into(), "checkmark".to_variant());
+                props.insert("toggle-state".into(), i32::from(auto_show).to_variant());
+            }
         }
         3 => {
             props.insert("type".into(), "separator".to_variant());
@@ -238,11 +260,12 @@ fn menu_properties(id: i32, names: &[String]) -> Option<Properties> {
     Some(props)
 }
 
-fn menu_layout(id: i32, depth: i32, names: &[String]) -> Option<MenuLayout> {
-    let props = menu_properties(id, names)?;
+fn menu_layout(id: i32, depth: i32, names: &[String], auto_show: bool) -> Option<MenuLayout> {
+    let props = menu_properties(id, names, auto_show)?;
     let children = if id == 0 && depth != 0 {
-        (1..=4)
-            .filter_map(|child| menu_layout(child, 0, names))
+        MENU_ITEMS
+            .into_iter()
+            .filter_map(|child| menu_layout(child, 0, names, auto_show))
             .map(|layout| layout.to_variant())
             .collect()
     } else {
@@ -251,8 +274,21 @@ fn menu_layout(id: i32, depth: i32, names: &[String]) -> Option<MenuLayout> {
     Some((id, props, children))
 }
 
+fn valid_menu_id(id: i32) -> bool {
+    id == 0 || MENU_ITEMS.contains(&id)
+}
+
+fn auto_show_update(enabled: bool) -> Variant {
+    let props = Properties::from([("toggle-state".into(), i32::from(enabled).to_variant())]);
+    (
+        vec![(AUTO_SHOW_ID, props)],
+        Vec::<(i32, Vec<String>)>::new(),
+    )
+        .to_variant()
+}
+
 fn menu_event(id: i32, event: &str) -> Result<Option<TrayAction>, &'static str> {
-    if !(0..=4).contains(&id) {
+    if !valid_menu_id(id) {
         return Err("Unknown menu item");
     }
     Ok(if event == "clicked" {
@@ -260,6 +296,7 @@ fn menu_event(id: i32, event: &str) -> Result<Option<TrayAction>, &'static str> 
             1 => Some(TrayAction::Show),
             2 => Some(TrayAction::Hide),
             4 => Some(TrayAction::Quit),
+            AUTO_SHOW_ID => Some(TrayAction::ToggleAutoShow),
             _ => None,
         }
     } else {
@@ -270,6 +307,7 @@ fn menu_event(id: i32, event: &str) -> Result<Option<TrayAction>, &'static str> 
 fn menu_request(
     method: &str,
     parameters: &Variant,
+    auto_show: bool,
 ) -> Result<(Variant, Vec<TrayAction>), &'static str> {
     let mut actions = Vec::new();
     let reply = match method {
@@ -277,7 +315,7 @@ fn menu_request(
             let (id, depth, names) = parameters
                 .get::<(i32, i32, Vec<String>)>()
                 .ok_or("Invalid layout arguments")?;
-            let layout = menu_layout(id, depth, &names).ok_or("Unknown menu item")?;
+            let layout = menu_layout(id, depth, &names, auto_show).ok_or("Unknown menu item")?;
             (1_u32, layout).to_variant()
         }
         "GetGroupProperties" => {
@@ -285,11 +323,12 @@ fn menu_request(
                 .get::<(Vec<i32>, Vec<String>)>()
                 .ok_or("Invalid property arguments")?;
             if ids.is_empty() {
-                ids.extend(0..=4);
+                ids.push(0);
+                ids.extend(MENU_ITEMS);
             }
             let props: Vec<_> = ids
                 .into_iter()
-                .filter_map(|id| menu_properties(id, &names).map(|props| (id, props)))
+                .filter_map(|id| menu_properties(id, &names, auto_show).map(|props| (id, props)))
                 .collect();
             (props,).to_variant()
         }
@@ -297,7 +336,7 @@ fn menu_request(
             let (id, name) = parameters
                 .get::<(i32, String)>()
                 .ok_or("Invalid property arguments")?;
-            let property = menu_properties(id, &[])
+            let property = menu_properties(id, &[], auto_show)
                 .and_then(|mut props| props.remove(&name))
                 .ok_or("Unknown menu item or property")?;
             (property,).to_variant()
@@ -324,14 +363,14 @@ fn menu_request(
         }
         "AboutToShow" => {
             let (id,) = parameters.get::<(i32,)>().ok_or("Invalid menu arguments")?;
-            menu_properties(id, &[]).ok_or("Unknown menu item")?;
+            menu_properties(id, &[], auto_show).ok_or("Unknown menu item")?;
             (false,).to_variant()
         }
         "AboutToShowGroup" => {
             let (ids,) = parameters
                 .get::<(Vec<i32>,)>()
                 .ok_or("Invalid menu arguments")?;
-            let errors: Vec<_> = ids.into_iter().filter(|id| !(0..=4).contains(id)).collect();
+            let errors: Vec<_> = ids.into_iter().filter(|id| !valid_menu_id(*id)).collect();
             (Vec::<i32>::new(), errors).to_variant()
         }
         _ => return Err("Unknown menu method"),
@@ -373,15 +412,20 @@ mod tests {
 
     #[test]
     fn menu_layout_contains_show_hide_and_quit_as_variant_children() {
-        let (reply, actions) =
-            menu_request("GetLayout", &(0, -1, Vec::<String>::new()).to_variant()).unwrap();
+        let (reply, actions) = menu_request(
+            "GetLayout",
+            &(0, -1, Vec::<String>::new()).to_variant(),
+            true,
+        )
+        .unwrap();
         assert_eq!(reply.type_().as_str(), "(u(ia{sv}av))");
         let (_, (_, props, children)) = reply.get::<(u32, MenuLayout)>().unwrap();
         assert_eq!(props["children-display"].str(), Some("submenu"));
-        assert_eq!(children.len(), 4);
+        assert_eq!(children.len(), 5);
         for (child, label) in children.iter().zip([
             Some("Показать клавиатуру"),
             Some("Скрыть клавиатуру"),
+            Some("Автоматически показывать клавиатуру"),
             None,
             Some("Выход"),
         ]) {
@@ -393,14 +437,14 @@ mod tests {
 
     #[test]
     fn menu_respects_depth_and_property_filters_and_rejects_unknown_items() {
-        let (_, props, children) = menu_layout(0, 0, &[]).unwrap();
+        let (_, props, children) = menu_layout(0, 0, &[], true).unwrap();
         assert!(!props.is_empty());
         assert!(children.is_empty());
-        let (_, props, children) = menu_layout(1, -1, &["label".into()]).unwrap();
+        let (_, props, children) = menu_layout(1, -1, &["label".into()], true).unwrap();
         assert_eq!(props.len(), 1);
         assert!(children.is_empty());
-        assert!(menu_layout(99, -1, &[]).is_none());
-        assert!(menu_request("GetLayout", &().to_variant()).is_err());
+        assert!(menu_layout(99, -1, &[], true).is_none());
+        assert!(menu_request("GetLayout", &().to_variant(), true).is_err());
     }
 
     #[test]
@@ -409,16 +453,19 @@ mod tests {
             (1, TrayAction::Show),
             (2, TrayAction::Hide),
             (4, TrayAction::Quit),
+            (AUTO_SHOW_ID, TrayAction::ToggleAutoShow),
         ] {
             let (reply, actions) = menu_request(
                 "Event",
                 &(id, "clicked", 0_i32.to_variant(), 0_u32).to_variant(),
+                true,
             )
             .unwrap();
             assert_eq!(reply.type_().as_str(), "()");
             assert_eq!(actions, vec![expected]);
         }
         assert_eq!(menu_event(4, "hovered"), Ok(None));
+        assert_eq!(menu_event(AUTO_SHOW_ID, "hovered"), Ok(None));
         assert_eq!(menu_event(0, "opened"), Ok(None));
         assert_eq!(menu_event(3, "clicked"), Ok(None));
         assert!(menu_event(99, "clicked").is_err());
@@ -430,7 +477,7 @@ mod tests {
             (99, "clicked", 0_i32.to_variant(), 0_u32),
             (2, "clicked", 0_i32.to_variant(), 0_u32),
         ];
-        let (reply, actions) = menu_request("EventGroup", &(events,).to_variant()).unwrap();
+        let (reply, actions) = menu_request("EventGroup", &(events,).to_variant(), true).unwrap();
         assert_eq!(reply.get::<(Vec<i32>,)>(), Some((vec![99],)));
         assert_eq!(actions, vec![TrayAction::Hide]);
     }
@@ -440,6 +487,7 @@ mod tests {
         let (reply, actions) = menu_request(
             "GetGroupProperties",
             &(vec![1, 99, 2], vec!["label"]).to_variant(),
+            true,
         )
         .unwrap();
         assert_eq!(reply.type_().as_str(), "(a(ia{sv}))");
@@ -448,17 +496,86 @@ mod tests {
         assert_eq!(props[1].0, 2);
         assert_eq!(props[1].1.len(), 1);
         assert!(actions.is_empty());
-        let (reply, _) = menu_request("GetProperty", &(4, "label").to_variant()).unwrap();
+        let (reply, _) = menu_request("GetProperty", &(4, "label").to_variant(), true).unwrap();
         assert_eq!(reply.type_().as_str(), "(v)");
         assert_eq!(reply.get::<(Variant,)>().unwrap().0.str(), Some("Выход"));
-        assert!(menu_request("GetProperty", &(99, "label").to_variant()).is_err());
+        assert!(menu_request("GetProperty", &(99, "label").to_variant(), true).is_err());
         let (reply, actions) =
-            menu_request("AboutToShowGroup", &(vec![0, 1, 99],).to_variant()).unwrap();
+            menu_request("AboutToShowGroup", &(vec![0, 1, 99],).to_variant(), true).unwrap();
         assert_eq!(
             reply.get::<(Vec<i32>, Vec<i32>)>(),
             Some((vec![], vec![99]))
         );
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn auto_show_checkmark_matches_state_in_every_property_query() {
+        for enabled in [true, false] {
+            let (_, props, _) = menu_layout(AUTO_SHOW_ID, 0, &[], enabled).unwrap();
+            assert_eq!(props["toggle-type"].str(), Some("checkmark"));
+            assert_eq!(props["toggle-state"].get::<i32>(), Some(i32::from(enabled)));
+            let (reply, actions) = menu_request(
+                "GetProperty",
+                &(AUTO_SHOW_ID, "toggle-state").to_variant(),
+                enabled,
+            )
+            .unwrap();
+            assert_eq!(
+                reply.get::<(Variant,)>().unwrap().0.get::<i32>(),
+                Some(i32::from(enabled))
+            );
+            assert!(actions.is_empty());
+            let (reply, _) = menu_request(
+                "GetGroupProperties",
+                &(Vec::<i32>::new(), vec!["toggle-state"]).to_variant(),
+                enabled,
+            )
+            .unwrap();
+            let (items,) = reply.get::<(Vec<(i32, Properties)>,)>().unwrap();
+            assert_eq!(
+                items.iter().find(|(id, _)| *id == AUTO_SHOW_ID).unwrap().1["toggle-state"]
+                    .get::<i32>(),
+                Some(i32::from(enabled))
+            );
+        }
+    }
+
+    #[test]
+    fn checkmark_update_signal_contains_new_state_and_no_removed_properties() {
+        for enabled in [false, true] {
+            let signal = auto_show_update(enabled);
+            assert_eq!(signal.type_().as_str(), "(a(ia{sv})a(ias))");
+            let (updated, removed) = signal
+                .get::<(Vec<(i32, Properties)>, Vec<(i32, Vec<String>)>)>()
+                .unwrap();
+            assert_eq!(updated.len(), 1);
+            assert_eq!(updated[0].0, AUTO_SHOW_ID);
+            assert_eq!(
+                updated[0].1["toggle-state"].get::<i32>(),
+                Some(i32::from(enabled))
+            );
+            assert!(removed.is_empty());
+        }
+    }
+
+    #[test]
+    fn grouped_toggle_events_do_not_drop_other_valid_actions() {
+        let events = vec![
+            (AUTO_SHOW_ID, "clicked", 0_i32.to_variant(), 0_u32),
+            (1, "clicked", 0_i32.to_variant(), 0_u32),
+            (AUTO_SHOW_ID, "clicked", 0_i32.to_variant(), 0_u32),
+        ];
+        let (reply, actions) = menu_request("EventGroup", &(events,).to_variant(), true).unwrap();
+        assert_eq!(reply.get::<(Vec<i32>,)>(), Some((vec![],)));
+        assert_eq!(
+            actions,
+            vec![
+                TrayAction::ToggleAutoShow,
+                TrayAction::Show,
+                TrayAction::ToggleAutoShow
+            ]
+        );
     }
 
     #[test]

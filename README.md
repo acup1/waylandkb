@@ -164,6 +164,14 @@ show/hide both halves; its context menu offers **Показать клавиат
 requests hide the keyboard without exiting. Launching it again shows the
 existing keyboard. Automatic input detection continues while it is hidden.
 
+The checkable **Автоматически показывать клавиатуру** menu item enables or
+disables automatic visibility for the current run (enabled by default).
+Turning it off leaves the panels as they are and cancels pending automatic
+hiding; focus changes then neither show nor hide them. The tray icon, menu
+commands, hide button and control socket still work manually. Turning it back
+on resumes automatic visibility using the currently focused input, without
+having to refocus the field.
+
 The tray uses the session D-Bus StatusNotifierItem/DBusMenu interfaces, without
 AppIndicator/GTK3 dependencies or compositor-specific configuration. A panel
 with StatusNotifier support is required. The icon is re-registered when the
