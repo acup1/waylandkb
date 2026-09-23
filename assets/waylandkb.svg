@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 32 32">
+  <title>waylandkb — split keyboard</title>
+  <defs>
+    <linearGradient id="case" x1="2" y1="5" x2="30" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset=".48" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="16" y1="5" x2="16" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e0f2fe" stop-opacity=".8"/>
+      <stop offset="1" stop-color="#c4b5fd" stop-opacity=".25"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="7" width="30" height="22" rx="6" fill="#312e81"/>
+  <rect x="1" y="5" width="30" height="22" rx="6" fill="url(#case)"/>
+  <rect x="1.5" y="5.5" width="29" height="21" rx="5.5" fill="none" stroke="url(#rim)"/>
+  <g fill="#1e1b4b" opacity=".22">
+    <rect x="3" y="8" width="12" height="16" rx="2.5"/>
+    <rect x="17" y="8" width="12" height="16" rx="2.5"/>
+  </g>
+  <g fill="#fff">
+    <rect x="4.5" y="9.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="8" y="9.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="11.5" y="9.5" width="2" height="2.5" rx=".65"/>
+    <rect x="18.5" y="9.5" width="2" height="2.5" rx=".65"/>
+    <rect x="21.5" y="9.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="25" y="9.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="4.5" y="13.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="8" y="13.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="11.5" y="13.5" width="2" height="2.5" rx=".65"/>
+    <rect x="18.5" y="13.5" width="2" height="2.5" rx=".65"/>
+    <rect x="21.5" y="13.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="25" y="13.5" width="2.5" height="2.5" rx=".65"/>
+    <rect x="4.5" y="17.5" width="4" height="2.5" rx=".65"/>
+    <rect x="9.5" y="17.5" width="4" height="2.5" rx=".65"/>
+    <rect x="18.5" y="17.5" width="4" height="2.5" rx=".65"/>
+    <rect x="23.5" y="17.5" width="4" height="2.5" rx=".65"/>
+  </g>
+  <g fill="#a5f3fc">
+    <rect x="7" y="21.5" width="6.5" height="1.5" rx=".75"/>
+    <rect x="18.5" y="21.5" width="6.5" height="1.5" rx=".75"/>
+  </g>
+</svg>
